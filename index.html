@@ -1,0 +1,622 @@
+<html lang="en"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video recognition using YOLOv8 tinygrad WebGPU</title>
+    <script src="./net.js"></script>
+    <style>
+        /* Base layout reset and typography */
+        body {
+            text-align: center;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        /* Container for the video feed and side panel */
+        .video-container {
+            position: relative;
+            width: 100%;
+            height: 90vh;
+            margin: 0 auto;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 24px;
+            padding: 0 24px;
+            box-sizing: border-box;
+            flex-wrap: wrap;
+        }
+
+        /* Wrapper that keeps video+canvas stacked */
+        .video-stage {
+            position: relative;
+            height: 90vh;
+            flex: 1 1 640px;
+            max-width: 100%;
+        }
+
+        /* Video feed and canvas share the same absolute area */
+        #video,
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: auto;
+            max-width: 100%;
+            height: 90vh;
+        }
+
+        /* Loading spinner styling */
+        .loader {
+            width: 48px;
+            height: 48px;
+            border: 5px solid #FFF;
+            border-bottom-color: transparent;
+            border-radius: 50%;
+            display: inline-block;
+            box-sizing: border-box;
+            animation: rotation 1s linear infinite;
+        }
+
+        @keyframes rotation {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Give canvas a transparent background so video shows through */
+        #canvas {
+            background: transparent;
+        }
+
+        /* FPS meter badge in the video corner */
+        #fps-meter {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            font-size: 18px;
+            border-radius: 5px;
+            z-index: 10;
+        }
+
+        /* Right-hand info/controls panel */
+        .side-panel {
+            width: 280px;
+            max-height: 90vh;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            border-radius: 12px;
+            padding: 16px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            font-size: 16px;
+        }
+
+        /* Section headings inside the panel */
+        .side-panel h3 {
+            margin-top: 0;
+            margin-bottom: 12px;
+        }
+
+        /* Detection results list */
+        #detections-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        /* Each detection entry */
+        #detections-list li {
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* Detection label styling */
+        #detections-list li .label {
+            font-weight: bold;
+        }
+
+        /* Detection confidence styling */
+        #detections-list li .confidence {
+            font-size: 14px;
+            color: #d0d0d0;
+        }
+
+        /* Placeholder text when there are no detections */
+        #detections-list li.empty {
+            justify-content: flex-start;
+            color: #cccccc;
+        }
+
+        /* Panel section layout */
+        .panel-section {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .panel-section label {
+            display: block;
+            margin-bottom: 8px;
+        }
+
+        .panel-section input[type="range"] {
+            width: 100%;
+        }
+
+        /* Pause/resume button styling */
+        .panel-section button {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 8px;
+            background: #1e88e5;
+            color: #ffffff;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        .panel-section button:active {
+            opacity: 0.9;
+        }
+
+        /* Full screen loading overlay */
+        .loading-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.6);
+            z-index: 10;
+        }
+
+        .loading-text {
+            font-size: 24px;
+            color: white;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h2>YOLOv8 tinygrad WebGPU</h2>
+    <h2 id="wgpu-error" style="display: none; color: red;">Error: WebGPU is not supported in this browser</h2>
+
+    <!-- Consent modal prompting for camera access and model loading -->
+    <div id="consent-container" style="position:fixed; inset:0; background:rgba(0,0,0,0.8); color:white; display:flex; align-items:center; justify-content:center; z-index:20;">
+    <div style="max-width:400px; text-align:center;">
+        <p>This demo uses your camera and loads a local ML model on your GPU.</p>
+        <button id="start-btn" style="font-size:18px; padding:10px 20px;">Allow and Start</button>
+    </div>
+    </div>
+
+
+    <!-- Main layout that pairs the live video stage with the detections panel -->
+    <div class="video-container">
+        <div class="video-stage">
+            <video id="video" muted="" autoplay="" playsinline=""></video>
+            <canvas id="canvas" width="1366" height="975"></canvas>
+            <div id="fps-meter">FPS: 22.4</div>
+
+            <div id="div-loading" class="loading-container" style="display: none;">
+                <p class="loading-text">Loading model</p>
+                <span class="loader"></span>
+            </div>
+        </div>
+        <!-- Side panel containing user controls and detections list -->
+        <div class="side-panel">
+            <div class="panel-section">
+                <h3>Controls</h3>
+                <label for="detection-interval">Detection interval: <span id="detection-interval-value">500</span> ms</label>
+                <input type="range" id="detection-interval" min="0" max="1000" step="50" value="500">
+                <button id="pause-btn">Pause Video</button>
+            </div>
+            <h3>Detections</h3>
+            <ul id="detections-list">
+                <li class="empty">No detections yet</li>
+            </ul>
+        </div>
+    </div>
+    <script>
+        // Track whether the user granted camera/WebGPU access
+        let userApproved = false;
+
+        // Core model/runtime state
+        let net = null;
+        const modelInputSize = 416;
+        let lastCalledTime;
+        let fps = 0, accumFps = 0, frameCounter = 0;
+
+        // Main DOM elements and canvases used during inference
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const context = canvas.getContext('2d');
+        const offscreenCanvas = document.createElement('canvas');
+        const fpsMeter = document.getElementById('fps-meter');
+        const loadingContainer = document.getElementById('div-loading');
+        const loadingText = document.querySelector('.loading-text');
+        const detectionsList = document.getElementById('detections-list');
+        const detectionIntervalSlider = document.getElementById('detection-interval');
+        const detectionIntervalValue = document.getElementById('detection-interval-value');
+        const pauseBtn = document.getElementById('pause-btn');
+        const wgpuError = document.getElementById('wgpu-error');
+        offscreenCanvas.width = modelInputSize;
+        offscreenCanvas.height = modelInputSize;
+        const offscreenContext = offscreenCanvas.getContext('2d');
+
+        // Loading-overlay text helper for streaming model downloads
+        const formatBytes = (bytes) => {
+            if (!bytes) return 'Loading model';
+            const mb = bytes / (1024 * 1024);
+            return `Loading model ${mb.toFixed(1)}MB`;
+        };
+
+        // Update copyright text with either percent or bytes loaded
+        const updateLoadingProgress = (loaded, total) => {
+            if (!loadingText) return;
+            if (total && total > 0) {
+                const percent = Math.min(100, Math.round((loaded / total) * 100));
+                loadingText.textContent = `Loading model ${percent}%`;
+            } else {
+                loadingText.textContent = formatBytes(loaded);
+            }
+        };
+
+        // Detection throttling + pause state
+        let detectionIntervalMs = 0;
+        let lastDetectionTime = 0;
+        let cachedDetections = [];
+        let isPaused = false;
+
+        // Reflect slider value in both state and label text
+        const updateDetectionInterval = (value) => {
+            detectionIntervalMs = Number(value);
+            if (detectionIntervalValue) {
+                detectionIntervalValue.textContent = detectionIntervalMs;
+            }
+        };
+
+        // Keep detection interval responsive to slider input
+        if (detectionIntervalSlider) {
+            updateDetectionInterval(detectionIntervalSlider.value);
+            detectionIntervalSlider.addEventListener('input', (event) => {
+                updateDetectionInterval(event.target.value);
+            });
+        }
+
+        // Toggle pause/resume playback while preserving last detections
+        if (pauseBtn) {
+            pauseBtn.addEventListener('click', async () => {
+                if (!video) return;
+                if (!isPaused) {
+                    video.pause();
+                    isPaused = true;
+                    pauseBtn.textContent = 'Resume Video';
+                } else {
+                    try {
+                        await video.play();
+                    } catch (err) {}
+                    isPaused = false;
+                    pauseBtn.textContent = 'Pause Video';
+                    lastDetectionTime = 0;
+                    cachedDetections = [];
+                }
+            });
+        }
+
+// no more auto video - user consent required
+//        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+//            navigator.mediaDevices.getUserMedia({ audio: false,  video: { facingMode: { ideal: "environment" }}}).then(function (stream) {
+//                video.srcObject = stream;
+//                video.onloadedmetadata = function() {
+//                    canvas.width = video.clientWidth;
+//                    canvas.height = video.clientHeight;
+//                }
+//            });
+//        }
+
+        // When the user grants consent, spin up the camera and render loop
+        document.getElementById("start-btn").onclick = async () => {
+            document.getElementById("consent-container").style.display = "none";
+            loadingContainer.style.display = "flex";
+            userApproved = true;
+            updateLoadingProgress(0, 1);
+            await startCamera();
+            requestAnimationFrame(processFrame);
+        };
+
+        // Request the media stream and size the canvas to the actual video feed
+        async function startCamera() {
+            if (!navigator.mediaDevices?.getUserMedia) return;
+
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: { facingMode: { ideal: "environment" } }
+            });
+
+            video.srcObject = stream;
+
+            await new Promise(resolve => {
+                video.onloadedmetadata = () => {
+                canvas.width = video.clientWidth;
+                canvas.height = video.clientHeight;
+                resolve();
+                };
+            });
+            }
+
+
+        // Render loop that handles frame capture, throttling, and drawing
+        async function processFrame() {
+            if (!userApproved) {
+                requestAnimationFrame(processFrame);
+                return;
+            }
+
+            if (video.videoWidth == 0 || video.videoHeight == 0) {
+                requestAnimationFrame(processFrame);
+                return;
+            }
+
+            if (isPaused) {
+                requestAnimationFrame(processFrame);
+                return;
+            }
+
+            const now = performance.now();
+            if (!lastCalledTime) {
+                lastCalledTime = now;
+                fps = 0;
+            } else {
+                delta = (now - lastCalledTime)/1000.0;
+                lastCalledTime = now;
+                accumFps += 1/delta;
+
+                if (frameCounter++ >= 10) {
+                    fps = accumFps/frameCounter;
+                    frameCounter = 0;
+                    accumFps = 0;
+                    fpsMeter.innerText = `FPS: ${fps.toFixed(1)}`
+                }
+            }
+
+            const videoAspectRatio = video.videoWidth / video.videoHeight;
+            let targetWidth, targetHeight;
+
+            if (videoAspectRatio > 1) {
+                targetWidth = modelInputSize;
+                targetHeight = modelInputSize / videoAspectRatio;
+            } else {
+                targetHeight = modelInputSize;
+                targetWidth = modelInputSize * videoAspectRatio;
+            }
+
+            const offsetX = (modelInputSize - targetWidth) / 2;
+            const offsetY = (modelInputSize - targetHeight) / 2;
+            offscreenContext.clearRect(0, 0, modelInputSize, modelInputSize);
+            offscreenContext.drawImage(video, offsetX, offsetY, targetWidth, targetHeight);
+            // Only run the expensive detection pipeline when enough time elapsed
+            const shouldDetect = cachedDetections.length === 0 || (now - lastDetectionTime) >= detectionIntervalMs;
+            if (shouldDetect) {
+                const boxes = await detectObjectsOnFrame(offscreenContext);
+                cachedDetections = boxes;
+                lastDetectionTime = performance.now();
+            }
+            const boxes = cachedDetections;
+            drawBoxes(offscreenCanvas, boxes, targetWidth, targetHeight, offsetX, offsetY);
+            requestAnimationFrame(processFrame);
+        }
+
+        // Kick off the render loop ahead of time; it will early-exit until ready
+        requestAnimationFrame(processFrame);
+
+        // Paint bounding boxes on the canvas and sync numbering with sidebar
+        function drawBoxes(offscreenCanvas, boxes, targetWidth, targetHeight, offsetX, offsetY) {
+            const ctx = document.querySelector("canvas").getContext("2d");
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.lineWidth = 3;
+            ctx.font = "30px serif";
+            const scaleX = canvas.width / targetWidth;
+            const scaleY = canvas.height / targetHeight;
+
+            boxes.forEach(([x1, y1, x2, y2, label, prob], index) => {
+                const classIndex = yolo_classes.indexOf(label);
+                const color = classColors[classIndex];
+                ctx.strokeStyle = color;
+                ctx.fillStyle = color;
+                const adjustedX1 = (x1 - offsetX) * scaleX;
+                const adjustedY1 = (y1 - offsetY) * scaleY;
+                const adjustedX2 = (x2 - offsetX) * scaleX;
+                const adjustedY2 = (y2 - offsetY) * scaleY;
+                const boxWidth = adjustedX2 - adjustedX1;
+                const boxHeight = adjustedY2 - adjustedY1;
+                ctx.strokeRect(adjustedX1, adjustedY1, boxWidth, boxHeight);
+                const displayLabel = `${index + 1}. ${label}`;
+                const textWidth = ctx.measureText(displayLabel).width;
+                ctx.fillRect(adjustedX1, adjustedY1 - 25, textWidth + 10, 25);
+                ctx.fillStyle = "#FFFFFF";
+                ctx.fillText(displayLabel, adjustedX1 + 5, adjustedY1 - 7);
+            });
+            renderDetections(boxes);
+        }
+
+        // Update the detection list UI with matching numbering/percentages
+        function renderDetections(boxes) {
+            if (!detectionsList) return;
+            detectionsList.innerHTML = '';
+
+            if (!boxes.length) {
+                const emptyItem = document.createElement('li');
+                emptyItem.className = 'empty';
+                emptyItem.textContent = 'No detections';
+                detectionsList.appendChild(emptyItem);
+                return;
+            }
+
+            boxes.forEach(([, , , , label, prob], index) => {
+                const item = document.createElement('li');
+                const labelSpan = document.createElement('span');
+                labelSpan.className = 'label';
+                labelSpan.textContent = `${index + 1}. ${label}`;
+
+                const confidenceSpan = document.createElement('span');
+                confidenceSpan.className = 'confidence';
+                confidenceSpan.textContent = typeof prob === 'number'
+                    ? `${(prob * 100).toFixed(1)}%`
+                    : '';
+
+                item.append(labelSpan, confidenceSpan);
+                detectionsList.appendChild(item);
+            });
+        }
+
+        // Run preprocessing, inference, and post-processing to get boxes
+        async function detectObjectsOnFrame(offscreenContext) {
+            if (!userApproved) return [];
+
+            if (!net) {
+                let device = await getDevice();
+                if (!device) {
+                    wgpuError.style.display = "block";
+                    loadingContainer.style.display = "none";
+                    return [];
+                }
+                net = await loadNet(device, updateLoadingProgress);
+                loadingContainer.style.display = "none";
+            }
+            let start = performance.now();
+            const [input,img_width,img_height] = await prepareInput(offscreenContext);
+            console.log("Preprocess took: " + (performance.now() - start) + " ms");
+            start = performance.now();
+            const output = await net(new Float32Array(input));
+            console.log("Inference took: " + (performance.now() - start) + " ms");
+            start = performance.now();
+            let out = processOutput(output[0],img_width,img_height);
+            console.log("Postprocess took: " + (performance.now() - start) + " ms");
+            return out;
+        }
+
+        // Convert the square canvas pixels into channel-first float data
+        async function prepareInput(offscreenContext) {
+            return new Promise(resolve => {
+                const [img_width,img_height] = [modelInputSize, modelInputSize]
+                const imgData = offscreenContext.getImageData(0,0,modelInputSize,modelInputSize);
+                const pixels = imgData.data;
+                const red = [], green = [], blue = [];
+
+                for (let index=0; index<pixels.length; index+=4) {
+                    red.push(pixels[index]/255.0);
+                    green.push(pixels[index+1]/255.0);
+                    blue.push(pixels[index+2]/255.0);
+                }
+                const input = [...red, ...green, ...blue];
+                resolve([input, img_width, img_height])
+            })
+        }
+
+        // Acquire a WebGPU device (returns false if unsupported)
+        const getDevice = async () => {
+            if (!navigator.gpu) return false;
+            const adapter = await navigator.gpu.requestAdapter();
+            return await adapter.requestDevice();
+        };
+        
+        // Decode YOLO outputs into [x1,y1,x2,y2,label,confidence] entries
+        function processOutput(output, img_width, img_height) {
+            let boxes = [];
+            const numPredictions = Math.pow(modelInputSize/32, 2) * 21;
+            for (let index=0;index<numPredictions;index++) {
+                const [class_id,prob] = [...Array(80).keys()]
+                    .map(col => [col, output[numPredictions*(col+4)+index]])
+                    .reduce((accum, item) => item[1]>accum[1] ? item : accum,[0,0]);
+
+                if (prob < 0.15) continue;
+                const label = yolo_classes[class_id];
+                const xc = output[index];
+                const yc = output[numPredictions+index];
+                const w = output[2*numPredictions+index];
+                const h = output[3*numPredictions+index];
+                const x1 = (xc-w/2)/modelInputSize*img_width;
+                const y1 = (yc-h/2)/modelInputSize*img_height;
+                const x2 = (xc+w/2)/modelInputSize*img_width;
+                const y2 = (yc+h/2)/modelInputSize*img_height;
+                boxes.push([x1,y1,x2,y2,label,prob]);
+            }
+
+            boxes = boxes.sort((box1,box2) => box2[5]-box1[5])
+            const result = [];
+            while (boxes.length>0) {
+                result.push(boxes[0]);
+                boxes = boxes.filter(box => iou(boxes[0],box)<0.7);
+            }
+            return result;
+        }
+
+        // Intersection-over-union helpers for non-maximum suppression
+        function iou(box1,box2) {
+            return intersection(box1,box2)/union(box1,box2);
+        }
+
+        function union(box1,box2) {
+            const [box1_x1,box1_y1,box1_x2,box1_y2] = box1;
+            const [box2_x1,box2_y1,box2_x2,box2_y2] = box2;
+            const box1_area = (box1_x2-box1_x1)*(box1_y2-box1_y1)
+            const box2_area = (box2_x2-box2_x1)*(box2_y2-box2_y1)
+            return box1_area + box2_area - intersection(box1,box2)
+        }
+
+        function intersection(box1,box2) {
+            const [box1_x1,box1_y1,box1_x2,box1_y2] = box1;
+            const [box2_x1,box2_y1,box2_x2,box2_y2] = box2;
+            const x1 = Math.max(box1_x1,box2_x1);
+            const y1 = Math.max(box1_y1,box2_y1);
+            const x2 = Math.min(box1_x2,box2_x2);
+            const y2 = Math.min(box1_y2,box2_y2);
+            return (x2-x1)*(y2-y1)
+        }
+
+        // COCO (Common Objects in Context) class names for YOLOv8 tiny
+        // https://docs.ultralytics.com/datasets/detect/coco/#dataset-yaml
+        const yolo_classes = [
+            'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
+            'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse',
+            'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase',
+            'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard',
+            'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+            'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant',
+            'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven',
+            'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+        ];
+
+        // Simple evenly-spaced HSL palette for class coloring
+        function generateColors(numColors) {
+            const colors = [];
+            for (let i = 0; i < 360; i += 360 / numColors) {
+                colors.push(`hsl(${i}, 100%, 50%)`);
+            }
+            return colors;
+        }
+
+        // Precompute class colors to keep visuals consistent
+        const classColors = generateColors(yolo_classes.length);
+    </script>
+</body></html>

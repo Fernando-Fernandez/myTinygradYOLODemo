@@ -18,11 +18,11 @@ A minimal WebGPU port of the YOLOv8 tinygrad model that runs entirely in the bro
 3. Click **Allow and Start** to grant camera access and begin inference. Adjust detection interval or pause/resume from the sidebar as needed.
 
 ## File Overview
-- `index.html` – UI, control panel, camera handling, drawing logic, and post-processing.
-- `net.js` – Auto-generated tinygrad kernels plus the model loader and inference pipeline.
-- `net.safetensors` – Serialized YOLOv8 weights used by `net.js`.
+- `index.html` - UI, control panel, camera handling, drawing logic, and post-processing.
+- `net.js` - Auto-generated tinygrad kernels plus the model loader and inference pipeline.
+- `net.safetensors` - Serialized YOLOv8 weights used by `net.js`.
 
 ## Notes
 - WebGPU must be available/enabled; otherwise the page shows an error banner.
-- The model file is large (~tens of MBs); the loading overlay displays download progress.
+- The model file is 6.4 MBs; the loading overlay displays download progress.
 - Detection threshold/logging is in `processOutput` within `index.html` if you want to tweak confidence cutoffs.

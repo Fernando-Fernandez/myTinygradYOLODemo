@@ -1,6 +1,12 @@
 # tinygradYOLO WebGPU Demo
 
-A minimal WebGPU port of the YOLOv8 tinygrad model that runs entirely in the browser. It loads `net.safetensors`, streams the weights into WebGPU buffers, and performs real-time object detection on live camera input with overlays and a control panel.
+A minimal WebGPU port of the YOLOv8 tinygrad model that runs entirely in the browser. It loads `net.safetensors`, streams the weights into WebGPU buffers, and performs real-time object detection on live camera input with overlays and a control panel. 
+
+Based on the [yolov8-tinygrad-webgl repo](https://github.com/softwiredtech/yolov8-tinygrad-webgl) with some modifications to use WebGPU instead of WebGL.
+
+## Live Demo
+
+[Try it out here!](https://my-tinygrad-yolo-demo.pages.dev/)
 
 ## Features
 - WebGPU-based inference using the exported tinygrad kernels in `net.js`.
